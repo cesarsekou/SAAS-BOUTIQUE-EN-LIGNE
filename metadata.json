@@ -1,0 +1,8 @@
+{
+  "name": "SocialStore SaaS",
+  "description": "Un SaaS pour permettre aux entreprises d'e-commerce sur les réseaux sociaux de créer leur propre boutique en ligne et catalogue.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
