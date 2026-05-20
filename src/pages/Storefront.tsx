@@ -266,7 +266,7 @@ export default function Storefront() {
                     className="w-full aspect-square glass-surface overflow-hidden flex items-center justify-center relative rounded-sm cursor-zoom-in group"
                   >
                     {product.imageUrl ? (
-                      <img src={product.imageUrl} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                      <img src={product.imageUrl} alt="" loading="lazy" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
                     ) : (
                       <ShoppingBag className="w-6 h-6 text-art-muted/50" />
                     )}
@@ -562,7 +562,7 @@ export default function Storefront() {
                     >
                       <div className="w-14 h-14 glass border border-art-border flex-shrink-0 flex items-center justify-center overflow-hidden">
                         {item.product.imageUrl ? (
-                           <img src={item.product.imageUrl} alt="" className="w-full h-full object-cover" />
+                           <img src={item.product.imageUrl} alt="" loading="lazy" className="w-full h-full object-cover" />
                         ) : (
                           <ShoppingBag className="w-5 h-5 text-art-muted/50" />
                         )}
@@ -1271,7 +1271,7 @@ function CheckoutArea({
           <div key={idx} className="flex gap-4 border-b border-art-border/50 pb-4 last:border-0 last:pb-0">
             <div className="w-16 h-16 glass border border-art-border flex-shrink-0 flex items-center justify-center overflow-hidden">
               {item.product.imageUrl ? (
-                <img src={item.product.imageUrl} alt="" className="w-full h-full object-cover" />
+                <img src={item.product.imageUrl} alt="" loading="lazy" className="w-full h-full object-cover" />
               ) : (
                 <ShoppingBag className="w-6 h-6 text-art-muted/50" />
               )}
