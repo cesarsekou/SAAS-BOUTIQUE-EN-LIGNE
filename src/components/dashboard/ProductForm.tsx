@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Plus, Minus, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useAuth } from '../../contexts/AuthContext';
+import { COUNTRIES } from '../../data/countries';
 
 interface ProductFormProps {
   userCategories: string[];
@@ -8,6 +10,8 @@ interface ProductFormProps {
 }
 
 export const ProductForm: React.FC<ProductFormProps> = ({ userCategories, onAdd }) => {
+  const { storeData } = useAuth();
+  const currency = COUNTRIES[storeData?.country || 'CI']?.currency || 'FCFA';
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [stock, setStock] = useState('0');
@@ -60,7 +64,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({ userCategories, onAdd 
             <input required value={name} onChange={e => setName(e.target.value)} type="text" placeholder="Nom du produit *" className="w-full glass-surface border border-art-border p-3 focus:outline-none focus:border-art-text text-sm" />
           </div>
           <div className="md:w-32">
-            <input required value={price} onChange={e => setPrice(e.target.value)} type="number" step="0.01" min="0" placeholder="Prix (€) *" className="w-full glass-surface border border-art-border p-3 focus:outline-none focus:border-art-text text-sm font-mono" />
+            <input required value={price} onChange={e => setPrice(e.target.value)} type="number" step="0.01" min="0" placeholder={`Prix (${currency}) *`} className="w-full glass-surface border border-art-border p-3 focus:outline-none focus:border-art-text text-sm font-mono" />
           </div>
           <div className="md:w-24">
             <input required value={stock} onChange={e => setStock(e.target.value)} type="number" min="0" placeholder="Stock" className="w-full glass-surface border border-art-border p-3 focus:outline-none focus:border-art-text text-sm font-mono" />

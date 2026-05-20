@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { User } from 'firebase/auth';
-import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
+import { User } from '@supabase/supabase-js';
+import { supabase } from '../../lib/supabase';
 import { Loader2, X, Package, FileText, MessageCircle } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
+import { useAuth } from '../../contexts/AuthContext';
+import { COUNTRIES } from '../../data/countries';
 
 interface OrdersProps {
   user: User;
@@ -14,28 +15,61 @@ export function Orders({ user }: OrdersProps) {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
+  const { storeData } = useAuth();
+  const storeSlug = storeData?.store_url || '';
+  const currency = COUNTRIES[storeData?.country || 'CI']?.currency || 'FCFA';
+
+  const fetchOrders = async () => {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error(error);
+      toast.error('Erreur lors du chargement des commandes');
+    } else {
+      setOrders(data || []);
+    }
+    setLoading(false);
+  };
 
   useEffect(() => {
-    const q = query(collection(db, 'orders'), where('storeId', '==', user.uid));
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const o = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      o.sort((a: any, b: any) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
-      setOrders(o);
-      setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'orders');
-    });
-    return () => unsubscribe();
-  }, [user.uid]);
+    fetchOrders();
+
+    const channel = supabase
+      .channel('orders:list-updates')
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'orders', 
+        filter: `user_id=eq.${user.id}` 
+      }, () => {
+        fetchOrders();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user.id]);
 
   const updateStatus = async (orderId: string, status: string) => {
     try {
-      await updateDoc(doc(db, 'orders', orderId), { status });
+      const { error } = await supabase
+        .from('orders')
+        .update({ status })
+        .eq('id', orderId);
+
+      if (error) throw error;
+
       const order = orders.find(o => o.id === orderId) || selectedOrder;
       if (selectedOrder?.id === orderId) {
         setSelectedOrder((prev: any) => ({ ...prev, status }));
       }
-      if (order?.customerPhone) {
+      
+      if (order?.customer_phone) {
         const link = getWhatsAppLink({ ...order, status });
         toast.success('Statut mis à jour', {
           description: 'Voulez-vous informer le client ?',
@@ -52,17 +86,20 @@ export function Orders({ user }: OrdersProps) {
   };
 
   const getWhatsAppLink = (order: any) => {
-    const phone = order.customerPhone?.replace(/\D/g, '') || '';
-    const total = order.totalAmount?.toFixed(2) || '0.00';
+    const phone = order.customer_phone?.replace(/\D/g, '') || '';
+    const total = Number(order.total)?.toFixed(0) || '0';
+    const trackingLink = storeSlug ? `${window.location.origin}/${storeSlug}?track=${order.id}` : '';
     let msg = '';
     if (order.status === 'pending') {
-      msg = `Bonjour ${order.customerName},\n\nNous avons bien reçu votre commande d'un montant de ${total} €. Elle est en attente de traitement.`;
+      msg = `👋 *Bonjour ${order.customer_name} !*\n\n✨ *Bonne nouvelle !* Nous avons bien reçu votre commande d'un montant de *${total} ${currency}*. Notre équipe la valide dès à présent.\n\n📱 *Suivez sa préparation en direct ici :*\n🔗 ${trackingLink}\n\nMerci pour votre confiance ! 🙏`;
+    } else if (order.status === 'processing') {
+      msg = `👨‍🍳 *Votre commande de ${total} ${currency} est en cours de préparation !*\n\nNous préparons vos articles avec le plus grand soin. Nous faisons le maximum pour que votre colis soit prêt au plus vite.\n\n📍 *Découvrez l'avancement en direct ici :*\n🔗 ${trackingLink}`;
+    } else if (order.status === 'shipping') {
+      msg = `🛵 *Bonne nouvelle, votre commande est en cours de livraison !*\n\nLe livreur a récupéré votre colis d'un montant de *${total} ${currency}* et fait route vers vous.\n\n🗺️ *Suivez le livreur en temps réel :*\n🔗 ${trackingLink}`;
     } else if (order.status === 'completed') {
-      msg = order.deliveryMethod === 'delivery'
-        ? `Bonjour ${order.customerName},\n\nVotre commande de ${total} € est en cours de préparation pour la livraison. Merci !`
-        : `Bonjour ${order.customerName},\n\nVotre commande de ${total} € est prête pour le retrait. Merci !`;
+      msg = `🎉 *Votre commande de ${total} ${currency} est prête ou livrée !*\n\nNous espérons que vos articles vous plairont. Merci pour votre achat et à très bientôt chez nous ! 💖\n\n🔗 ${trackingLink}`;
     } else if (order.status === 'cancelled') {
-      msg = `Bonjour ${order.customerName},\n\nVotre commande de ${total} € a été annulée.`;
+      msg = `✉️ *Votre commande d'un montant de ${total} ${currency} a été annulée.*\n\nSi vous pensez qu'il s'agit d'une erreur ou si vous souhaitez en connaître la raison, n'hésitez pas à nous recontacter.`;
     }
     return `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
   };
@@ -99,17 +136,17 @@ export function Orders({ user }: OrdersProps) {
                 {orders.map(order => (
                   <tr key={order.id} onClick={() => setSelectedOrder(order)} className="hover:glass-surface/50 transition-colors cursor-pointer group">
                     <td className="px-4 md:px-8 py-4 md:py-6 whitespace-nowrap text-xs md:text-sm text-art-muted font-mono group-hover:text-art-text">
-                      {order.createdAt?.toDate().toLocaleDateString()}{' '}
-                      {order.createdAt?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {new Date(order.created_at).toLocaleDateString()}{' '}
+                      {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </td>
                     <td className="px-4 md:px-8 py-4 md:py-6 text-xs md:text-sm text-art-text">
-                      <div className="font-medium tracking-tight mb-1">{order.customerName}</div>
+                      <div className="font-medium tracking-tight mb-1">{order.customer_name}</div>
                       <div className="text-art-muted text-[10px] md:text-xs font-mono">
-                        {order.customerPhone}{order.customerEmail ? ` · ${order.customerEmail}` : ''}
+                        {order.customer_phone}
                       </div>
                     </td>
                     <td className="px-4 md:px-8 py-4 md:py-6 whitespace-nowrap font-serif text-base md:text-lg text-art-text">
-                      €{order.totalAmount?.toFixed(2)}
+                      {Number(order.total).toFixed(2)} {currency}
                     </td>
                     <td className="px-4 md:px-8 py-4 md:py-6 whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <select
@@ -118,11 +155,15 @@ export function Orders({ user }: OrdersProps) {
                         className={cn(
                           'text-[10px] md:text-xs uppercase font-bold tracking-widest p-1.5 md:p-2 border border-art-border focus:outline-none focus:border-art-text transition-colors cursor-pointer',
                           order.status === 'completed' ? 'bg-green-50 text-green-900 border-green-200' :
+                          order.status === 'processing' ? 'bg-blue-50 text-blue-900 border-blue-200' :
+                          order.status === 'shipping' ? 'bg-amber-50 text-amber-900 border-amber-200' :
                           order.status === 'cancelled' ? 'bg-red-50 text-red-900 border-red-200' :
                           'bg-white text-art-text'
                         )}
                       >
                         <option value="pending">En attente</option>
+                        <option value="processing">En préparation</option>
+                        <option value="shipping">En livraison</option>
                         <option value="completed">Terminée</option>
                         <option value="cancelled">Annulée</option>
                       </select>
@@ -152,21 +193,12 @@ export function Orders({ user }: OrdersProps) {
               <div>
                 <h3 className="text-[10px] uppercase font-bold tracking-widest text-art-muted mb-2">Informations Client</h3>
                 <div className="glass-surface border border-art-border p-4 text-sm font-mono space-y-2 mb-4">
-                  <p><span className="text-art-muted">Nom:</span> {selectedOrder.customerName}</p>
-                  <p><span className="text-art-muted">Tel:</span> {selectedOrder.customerPhone}</p>
-                  {selectedOrder.customerEmail && <p><span className="text-art-muted">Email:</span> {selectedOrder.customerEmail}</p>}
+                  <p><span className="text-art-muted">Nom:</span> {selectedOrder.customer_name}</p>
+                  <p><span className="text-art-muted">Tel:</span> {selectedOrder.customer_phone}</p>
                 </div>
                 <h3 className="text-[10px] uppercase font-bold tracking-widest text-art-muted mb-2">Livraison</h3>
                 <div className="glass-surface border border-art-border p-4 text-sm font-mono space-y-2">
-                  <p><span className="text-art-muted">Mode:</span> {selectedOrder.deliveryMethod === 'delivery' ? 'Livraison à domicile' : 'Retrait en magasin'}</p>
-                  {selectedOrder.deliveryMethod === 'delivery' && (
-                    <>
-                      <p><span className="text-art-muted">Ville:</span> {selectedOrder.deliveryCity}</p>
-                      <p><span className="text-art-muted">Quartier:</span> {selectedOrder.deliveryNeighborhood}</p>
-                      {selectedOrder.deliveryAddress && <p><span className="text-art-muted">Adresse:</span> {selectedOrder.deliveryAddress}</p>}
-                      <p><span className="text-art-muted">Frais:</span> {selectedOrder.deliveryCost?.toFixed(2) || '0.00'} €</p>
-                    </>
-                  )}
+                  <p><span className="text-art-muted">Adresse:</span> {selectedOrder.customer_address}</p>
                 </div>
               </div>
               <div>
@@ -174,7 +206,7 @@ export function Orders({ user }: OrdersProps) {
                 <div className="glass-surface border border-art-border p-4 text-sm space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="font-mono text-art-muted">Date:</span>
-                    <span className="font-mono">{selectedOrder.createdAt?.toDate().toLocaleDateString()} {selectedOrder.createdAt?.toDate().toLocaleTimeString()}</span>
+                    <span className="font-mono">{new Date(selectedOrder.created_at).toLocaleDateString()} {new Date(selectedOrder.created_at).toLocaleTimeString()}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="font-mono text-art-muted">Statut:</span>
@@ -184,16 +216,20 @@ export function Orders({ user }: OrdersProps) {
                       className={cn(
                         'text-xs uppercase font-bold tracking-widest p-1.5 border border-art-border focus:outline-none cursor-pointer',
                         selectedOrder.status === 'completed' ? 'bg-green-50 text-green-900 border-green-200' :
+                        selectedOrder.status === 'processing' ? 'bg-blue-50 text-blue-900 border-blue-200' :
+                        selectedOrder.status === 'shipping' ? 'bg-amber-50 text-amber-900 border-amber-200' :
                         selectedOrder.status === 'cancelled' ? 'bg-red-50 text-red-900 border-red-200' :
                         'bg-white text-art-text'
                       )}
                     >
                       <option value="pending">En attente</option>
+                      <option value="processing">En préparation</option>
+                      <option value="shipping">En livraison</option>
                       <option value="completed">Terminée</option>
                       <option value="cancelled">Annulée</option>
                     </select>
                   </div>
-                  {selectedOrder.customerPhone && (
+                  {selectedOrder.customer_phone && (
                     <div className="pt-2 border-t border-art-border/50">
                       <a
                         href={getWhatsAppLink(selectedOrder)}
@@ -214,25 +250,25 @@ export function Orders({ user }: OrdersProps) {
               {selectedOrder.items?.map((item: any, idx: number) => (
                 <div key={idx} className="flex gap-4 border-b border-art-border/50 pb-4 last:border-0 last:pb-0">
                   <div className="w-16 h-16 glass-surface border border-art-border flex-shrink-0 flex items-center justify-center overflow-hidden">
-                    {item.product?.imageUrl ? (
-                      <img src={item.product.imageUrl} alt="" className="w-full h-full object-cover" />
+                    {item.imageUrl ? (
+                      <img src={item.imageUrl} alt="" className="w-full h-full object-cover" />
                     ) : (
                       <Package className="w-6 h-6 text-art-muted/50" />
                     )}
                   </div>
                   <div className="flex-1 flex justify-center flex-col">
-                    <span className="font-bold text-sm tracking-tight">{item.product?.name}</span>
+                    <span className="font-bold text-sm tracking-tight">{item.name}</span>
                     <span className="text-[10px] uppercase font-bold tracking-widest text-art-muted mt-1">Qté: {item.quantity}</span>
                   </div>
                   <div className="flex flex-col justify-center text-right font-mono">
-                    <span className="font-bold text-sm mb-1">{((item.product?.price || 0) * item.quantity).toFixed(2)} €</span>
-                    <span className="text-[10px] text-art-muted">{item.product?.price?.toFixed(2)} € / u</span>
+                    <span className="font-bold text-sm mb-1">{((item.price || 0) * item.quantity).toFixed(2)} {currency}</span>
+                    <span className="text-[10px] text-art-muted">{item.price?.toFixed(2)} {currency} / u</span>
                   </div>
                 </div>
               ))}
               <div className="pt-4 flex justify-between font-bold text-art-text text-xl font-serif italic border-t border-art-border">
                 <span>Total</span>
-                <span>€{selectedOrder.totalAmount?.toFixed(2)}</span>
+                <span>{Number(selectedOrder.total)?.toFixed(2)} {currency}</span>
               </div>
             </div>
           </div>

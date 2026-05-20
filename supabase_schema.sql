@@ -11,6 +11,9 @@ CREATE TABLE public.users (
   whatsapp_number TEXT,
   subscription_plan TEXT DEFAULT 'free',
   subscription_valid_until TIMESTAMPTZ,
+  delivery_cost NUMERIC DEFAULT 1000,
+  categories TEXT[] DEFAULT '{}',
+  country TEXT DEFAULT 'CI',
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -70,8 +73,12 @@ CREATE TABLE public.orders (
 -- Activer RLS pour les commandes
 ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Tout le monde peut créer une commande" ON public.orders FOR INSERT WITH CHECK (true);
-CREATE POLICY "Les marchands voient leurs propres commandes" ON public.orders FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Tout le monde peut voir les commandes pour le suivi" ON public.orders FOR SELECT USING (true);
 CREATE POLICY "Les marchands modifient leurs propres commandes" ON public.orders FOR UPDATE USING (auth.uid() = user_id);
+
+-- Activer le temps réel pour les commandes dans Supabase
+ALTER PUBLICATION supabase_realtime ADD TABLE public.orders;
+
 
 -- 4. Configuration du Storage (Stockage des images)
 INSERT INTO storage.buckets (id, name, public) VALUES ('products', 'products', true);
@@ -81,3 +88,14 @@ CREATE POLICY "Tout le monde peut voir les images" ON storage.objects FOR SELECT
 CREATE POLICY "Les marchands peuvent uploader des images" ON storage.objects FOR INSERT WITH CHECK ( auth.role() = 'authenticated' );
 CREATE POLICY "Les marchands modifient leurs images" ON storage.objects FOR UPDATE USING ( auth.uid() = owner );
 CREATE POLICY "Les marchands suppriment leurs images" ON storage.objects FOR DELETE USING ( auth.uid() = owner );
+
+
+-- 5. Fonction RPC pour décrémenter le stock atomiquement (Prévient les Race Conditions)
+CREATE OR REPLACE FUNCTION public.decrement_stock(product_id UUID, quantity INT)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE public.products
+  SET stock_count = GREATEST(0, stock_count - quantity)
+  WHERE id = product_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

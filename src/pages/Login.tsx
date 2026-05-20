@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { ArrowLeft, Loader2, User } from 'lucide-react';
+import { toast } from 'sonner';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -14,29 +13,92 @@ export default function Login() {
     setIsLoading(true);
     setError(null);
     try {
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
-      const user = result.user;
-
-      // Check if user document exists
-      const userRef = doc(db, 'users', user.uid);
-      const docSnap = await getDoc(userRef);
-
-      if (!docSnap.exists()) {
-        const baseSlug = user.displayName?.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'store';
-        const randomSuffix = Math.floor(Math.random() * 10000);
-        
-        await setDoc(userRef, {
-          storeName: `${user.displayName || 'Ma'} Boutique`,
-          storeSlug: `${baseSlug}-${randomSuffix}`,
-          createdAt: serverTimestamp()
-        });
-      }
-
-      navigate('/dashboard');
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/dashboard`
+        }
+      });
+      if (error) throw error;
+      // Redirection is handled by Supabase OAuth flow
     } catch (err: any) {
       console.error(err);
       setError(err.message || "Une erreur est survenue lors de la connexion.");
+      setIsLoading(false);
+    }
+  };
+
+  const handleAnonymousLogin = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const { data, error } = await supabase.auth.signInAnonymously();
+      if (error) throw error;
+
+      if (data.user) {
+        const userId = data.user.id;
+        // Update the auto-generated row for this demo user
+        const randomSuffix = Math.floor(Math.random() * 10000);
+        await supabase.from('users').update({
+          store_name: 'Boutique Démo',
+          store_url: `demo-${randomSuffix}`,
+          store_description: 'Bienvenue sur notre boutique de démonstration OmniShop ! Découvrez nos produits premium.',
+          subscription_plan: 'free',
+          categories: ['Nouveautés', 'Premium', 'Accessoires']
+        }).eq('id', userId);
+
+        // Inject 4 beautiful demo products
+        const demoProducts = [
+          {
+            user_id: userId,
+            name: 'Sneakers Premium Urban',
+            price: 45000,
+            image: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=600&q=80',
+            category: 'Nouveautés',
+            description: 'Sneakers élégantes et ultra-confortables conçues pour le style urbain quotidien.',
+            in_stock: true,
+            stock_count: 12
+          },
+          {
+            user_id: userId,
+            name: 'Montre Minimaliste Classic',
+            price: 75000,
+            image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=600&q=80',
+            category: 'Premium',
+            description: 'Montre avec bracelet en cuir véritable et cadran minimaliste épuré.',
+            in_stock: true,
+            stock_count: 5
+          },
+          {
+            user_id: userId,
+            name: 'Sac à Main Haute Couture',
+            price: 120000,
+            image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?auto=format&fit=crop&w=600&q=80',
+            category: 'Premium',
+            description: 'Sac en cuir italien haut de gamme, l\'accessoire parfait pour sublimer vos tenues.',
+            in_stock: true,
+            stock_count: 3
+          },
+          {
+            user_id: userId,
+            name: 'Lunettes de Soleil Vintage',
+            price: 25000,
+            image: 'https://images.unsplash.com/photo-1572635196237-14b3f281503f?auto=format&fit=crop&w=600&q=80',
+            category: 'Accessoires',
+            description: 'Protection UV400 et style rétro intemporel pour toutes les saisons.',
+            in_stock: true,
+            stock_count: 20
+          }
+        ];
+
+        await supabase.from('products').insert(demoProducts);
+        
+        toast.success("Mode Démo activé avec produits exemples !");
+        navigate('/dashboard');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setError("Le mode invité n'est pas activé ou une erreur est survenue.");
     } finally {
       setIsLoading(false);
     }
@@ -103,6 +165,30 @@ export default function Login() {
                   </svg>
                   Continuer avec Google
                 </span>
+              )}
+            </button>
+
+            <div className="relative my-6">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-art-border"></div>
+              </div>
+              <div className="relative flex justify-center text-xs font-mono uppercase tracking-widest">
+                <span className="px-2 bg-art-surface text-art-muted">Ou</span>
+              </div>
+            </div>
+
+            <button
+              onClick={handleAnonymousLogin}
+              disabled={isLoading}
+              className="w-full flex justify-center items-center gap-3 py-4 px-4 bg-art-text text-white hover:bg-black transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-art-text disabled:opacity-50 text-xs uppercase font-bold tracking-widest shadow-[4px_4px_0px_rgba(0,0,0,0.1)] active:translate-y-px active:shadow-[2px_2px_0px_rgba(0,0,0,0.1)]"
+            >
+              {isLoading ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <>
+                  <User className="w-5 h-5" />
+                  Tester sans inscription
+                </>
               )}
             </button>
           </div>

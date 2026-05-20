@@ -1,6 +1,8 @@
 import React from 'react';
 import { Edit2, Trash2 } from 'lucide-react';
 import { Product } from '../../types/index';
+import { useAuth } from '../../contexts/AuthContext';
+import { COUNTRIES } from '../../data/countries';
 
 interface ProductCardProps {
   product: Product;
@@ -9,6 +11,8 @@ interface ProductCardProps {
 }
 
 export const ProductCard: React.FC<ProductCardProps> = ({ product, onEdit, onDelete }) => {
+  const { storeData } = useAuth();
+  const currency = COUNTRIES[storeData?.country || 'CI']?.currency || 'FCFA';
   return (
     <div className="glass p-4 flex flex-col space-y-4 group">
       <div className="h-48 glass-surface flex items-center justify-center italic text-art-muted font-serif overflow-hidden relative">
@@ -43,7 +47,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onEdit, onDel
           </div>
           {product.description && <p className="text-xs text-art-muted mt-2 line-clamp-1">{product.description}</p>}
         </div>
-        <p className="font-serif text-lg tracking-tight whitespace-nowrap ml-4">€{product.price.toFixed(2)}</p>
+        <p className="font-serif text-lg tracking-tight whitespace-nowrap ml-4">{product.price.toFixed(0)} {currency}</p>
       </div>
     </div>
   );

@@ -1,18 +1,8 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useEffect, useState } from 'react';
 import { Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
-import { onAuthStateChanged, signOut, User } from 'firebase/auth';
-import {
-  collection, query, where, getDocs, doc, getDoc,
-  updateDoc, addDoc, deleteDoc, serverTimestamp, orderBy, onSnapshot, limit,
-} from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { auth, db, storage } from '../lib/firebase';
-import { Package, ShoppingCart, Settings, LogOut, Plus, Trash2, Loader2, Search, BarChart, Edit2, CreditCard } from 'lucide-react';
+import { User } from '@supabase/supabase-js';
+import { supabase } from '../lib/supabase';
+import { Package, ShoppingCart, Settings, LogOut, Loader2, Search, BarChart, CreditCard } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { toast } from 'sonner';
 import imageCompression from 'browser-image-compression';
@@ -26,51 +16,61 @@ import { Stats } from '../components/dashboard/Stats';
 import { StoreSettings } from '../components/dashboard/StoreSettings';
 import { Billing } from '../components/dashboard/Billing';
 import { Product } from '../types/index';
-
-// ─── Dashboard Shell ──────────────────────────────────────────────────────────
+import { useAuth } from '../contexts/AuthContext';
+import { OnboardingWizard } from '../components/dashboard/OnboardingWizard';
+import { COUNTRIES } from '../data/countries';
 
 export default function Dashboard() {
+  const { storeData, refreshStoreData } = useAuth();
+  const currency = COUNTRIES[storeData?.country || 'CI']?.currency || 'FCFA';
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
-      if (!u) navigate('/login');
-      else setUser(u);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
+        navigate('/login');
+      } else {
+        setUser(session.user);
+      }
       setLoading(false);
     });
-    return unsub;
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) navigate('/login');
+      else setUser(session.user);
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, [navigate]);
 
   // Real-time new-order notifications
   useEffect(() => {
     if (!user) return;
-    const mountTime = new Date();
-    const q = query(
-      collection(db, 'orders'),
-      where('storeId', '==', user.uid),
-      orderBy('createdAt', 'desc'),
-      limit(20)
-    );
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added') {
-          const order = change.doc.data();
-          if (order.createdAt) {
-            const createdAt = order.createdAt.toDate();
-            if (createdAt > mountTime && order.status === 'pending') {
-              toast.success(`Nouvelle commande de ${order.customerName}`, {
-                description: `Montant : ${order.totalAmount?.toFixed(2)} € | ${order.items?.length || 0} article(s)`,
-                duration: 8000,
-                action: { label: 'Voir la commande', onClick: () => navigate('/dashboard/orders') },
-              });
-            }
-          }
+    const channel = supabase
+      .channel('dashboard:new-orders')
+      .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'orders', 
+        filter: `user_id=eq.${user.id}` 
+      }, payload => {
+        const order = payload.new;
+        if (order.status === 'pending') {
+          toast.success(`Nouvelle commande de ${order.customer_name}`, {
+            description: `Montant : ${Number(order.total)?.toFixed(2)} ${currency} | ${order.items?.length || 0} article(s)`,
+            duration: 8000,
+            action: { label: 'Voir la commande', onClick: () => navigate('/dashboard/orders') },
+          });
         }
-      });
-    }, (error) => { console.error('Orders listener error', error); });
-    return () => unsubscribe();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user, navigate]);
 
   if (loading) {
@@ -83,6 +83,10 @@ export default function Dashboard() {
 
   if (!user) return null;
 
+  if (user && storeData && !storeData.store_name) {
+    return <OnboardingWizard userId={user.id} onComplete={refreshStoreData} />;
+  }
+
   return (
     <div className="flex flex-col md:flex-row h-screen font-sans text-art-text overflow-hidden relative bg-transparent">
       <Sidebar />
@@ -91,7 +95,14 @@ export default function Dashboard() {
           <Route path="/" element={<Products user={user} />} />
           <Route path="/orders" element={<Orders user={user} />} />
           <Route path="/stats" element={<Stats user={user} />} />
-          <Route path="/billing" element={<Billing user={user} />} />
+          <Route path="/billing" element={
+            user.is_anonymous 
+              ? <div className="max-w-md mx-auto text-center py-24 space-y-4">
+                  <p className="text-2xl font-serif italic text-art-text">Mode Démo</p>
+                  <p className="text-sm text-art-muted">L'abonnement n'est pas disponible en mode invité. Créez un compte pour accéder à cette fonctionnalité.</p>
+                </div>
+              : <Billing user={user} />
+          } />
           <Route path="/settings" element={<StoreSettings user={user} />} />
         </Routes>
       </main>
@@ -99,14 +110,14 @@ export default function Dashboard() {
   );
 }
 
-// ─── Sidebar ──────────────────────────────────────────────────────────────────
-
 function Sidebar() {
   const location = useLocation();
   const navigate = useNavigate();
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const handleLogout = async () => {
-    await signOut(auth);
+    setLoggingOut(true);
+    await supabase.auth.signOut();
     navigate('/');
   };
 
@@ -125,8 +136,8 @@ function Sidebar() {
           <h1 className="text-xl md:text-2xl font-bold tracking-tighter italic font-serif text-art-text">OmniShop.</h1>
           <p className="text-[10px] uppercase tracking-widest text-art-muted mt-1 hidden md:block">Social Commerce</p>
         </div>
-        <button onClick={handleLogout} className="md:hidden flex items-center text-xs font-medium text-art-muted hover:text-art-text transition">
-          <LogOut className="w-4 h-4" />
+        <button onClick={handleLogout} disabled={loggingOut} className="md:hidden flex items-center text-xs font-medium text-art-muted hover:text-art-text transition">
+          {loggingOut ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogOut className="w-4 h-4" />}
         </button>
       </div>
       <nav className="flex md:flex-col gap-4 md:gap-6 overflow-x-auto pb-2 md:pb-0 scrollbar-hide md:flex-1">
@@ -150,53 +161,74 @@ function Sidebar() {
         })}
       </nav>
       <div className="hidden md:block mt-auto pt-4 border-t border-art-border">
-        <button onClick={handleLogout} className="flex items-center gap-3 text-sm font-medium text-art-muted hover:text-art-text transition w-fit group">
-          <LogOut className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-          Déconnexion
+        <button onClick={handleLogout} disabled={loggingOut} className="flex items-center gap-3 text-sm font-medium text-art-muted hover:text-art-text transition w-fit group disabled:opacity-50">
+          {loggingOut ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogOut className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />}
+          {loggingOut ? 'Déconnexion...' : 'Déconnexion'}
         </button>
       </div>
     </aside>
   );
 }
 
-// ─── Products View ────────────────────────────────────────────────────────────
-
 function Products({ user }: { user: User }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  // Optional categories fetched from store
   const [userCategories, setUserCategories] = useState<string[]>([]);
 
   useEffect(() => {
     const init = async () => {
-      const snap = await getDoc(doc(db, 'users', user.uid));
-      if (snap.exists() && snap.data().categories) setUserCategories(snap.data().categories);
+      // Optional: fetch user categories if schema supported it. Since it was removed from schema, we skip or fetch it if needed.
       await fetchProducts();
     };
     init();
-  }, [user.uid]);
+  }, [user.id]);
 
   const fetchProducts = async () => {
-    const q = query(collection(db, 'products'), where('storeId', '==', user.uid));
-    const snap = await getDocs(q);
-    const p = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Product[];
-    p.sort((a: any, b: any) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
-    setProducts(p);
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+      
+    if (data) {
+      setProducts(data.map(d => ({
+        id: d.id,
+        name: d.name,
+        price: Number(d.price),
+        stock: d.stock_count,
+        category: d.category,
+        description: d.description,
+        imageUrl: d.image,
+        createdAt: d.created_at
+      })));
+    }
     setLoading(false);
   };
 
   const uploadImage = async (file: File): Promise<string> => {
     const options = {
-      maxSizeMB: 0.5, // Max 500KB
+      maxSizeMB: 0.5,
       maxWidthOrHeight: 1080,
       useWebWorker: true,
     };
     try {
       const compressedFile = await imageCompression(file, options);
-      const fileRef = storageRef(storage, `products/${user.uid}/${Date.now()}_${compressedFile.name}`);
-      const snapshot = await uploadBytes(fileRef, compressedFile);
-      return getDownloadURL(snapshot.ref);
+      const filePath = `${user.id}/${Date.now()}_${compressedFile.name}`;
+      
+      const { data, error } = await supabase.storage
+        .from('products')
+        .upload(filePath, compressedFile);
+        
+      if (error) throw error;
+      
+      const { data: { publicUrl } } = supabase.storage
+        .from('products')
+        .getPublicUrl(data.path);
+        
+      return publicUrl;
     } catch (error) {
       console.error("Compression/Upload error:", error);
       throw error;
@@ -207,18 +239,24 @@ function Products({ user }: { user: User }) {
     let finalImageUrl = data.imageUrl || '';
     if (file) {
       try { finalImageUrl = await uploadImage(file); }
-      catch { toast.error('Erreur upload image. Vérifiez Firebase Storage.'); return; }
+      catch { toast.error('Erreur upload image.'); return; }
     }
-    await addDoc(collection(db, 'products'), {
-      storeId: user.uid,
+    
+    const { error } = await supabase.from('products').insert({
+      user_id: user.id,
       name: data.name,
       price: data.price,
-      stock: data.stock || 0,
+      stock_count: data.stock || 0,
       category: data.category || '',
       description: data.description || '',
-      imageUrl: finalImageUrl,
-      createdAt: serverTimestamp(),
+      image: finalImageUrl
     });
+    
+    if (error) {
+      toast.error('Erreur lors de l\'ajout du produit');
+      return;
+    }
+    
     toast.success('Produit ajouté !');
     fetchProducts();
   };
@@ -230,18 +268,41 @@ function Products({ user }: { user: User }) {
   ) => {
     let finalImageUrl = data.imageUrl;
     if (file) {
-      try { finalImageUrl = await uploadImage(file); }
-      catch { toast.error('Erreur upload image.'); return; }
+      try {
+        // Clean up old image from storage if it exists
+        const oldProduct = products.find(p => p.id === productId);
+        if (oldProduct?.imageUrl && oldProduct.imageUrl.includes('/storage/v1/object/public/products/')) {
+          const oldPath = oldProduct.imageUrl.split('/storage/v1/object/public/products/')[1];
+          if (oldPath) {
+            await supabase.storage.from('products').remove([decodeURIComponent(oldPath)]);
+          }
+        }
+        finalImageUrl = await uploadImage(file);
+      } catch { toast.error('Erreur upload image.'); return; }
     }
-    await updateDoc(doc(db, 'products', productId), { ...data, imageUrl: finalImageUrl });
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, ...data, imageUrl: finalImageUrl } : p));
-    setEditingProduct(null);
+    
+    const { error } = await supabase.from('products').update({
+      name: data.name,
+      price: data.price,
+      stock_count: data.stock,
+      category: data.category,
+      description: data.description,
+      image: finalImageUrl
+    }).eq('id', productId);
+    
+    if (error) {
+      toast.error('Erreur de modification');
+      return;
+    }
+    
     toast.success('Produit modifié !');
+    setEditingProduct(null);
+    fetchProducts();
   };
 
   const handleDelete = async (id: string) => {
     if (!window.confirm('Supprimer ce produit ?')) return;
-    await deleteDoc(doc(db, 'products', id));
+    await supabase.from('products').delete().eq('id', id);
     setProducts(products.filter(p => p.id !== id));
     toast.success('Produit supprimé');
   };

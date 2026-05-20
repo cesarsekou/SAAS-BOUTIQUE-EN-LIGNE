@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { X, Edit2, Loader2 } from 'lucide-react';
 import { Product } from '../../types/index';
+import { useAuth } from '../../contexts/AuthContext';
+import { COUNTRIES } from '../../data/countries';
 
 interface EditProductModalProps {
   product: Product;
@@ -10,6 +12,8 @@ interface EditProductModalProps {
 }
 
 export const EditProductModal: React.FC<EditProductModalProps> = ({ product, userCategories, onClose, onSave }) => {
+  const { storeData } = useAuth();
+  const currency = COUNTRIES[storeData?.country || 'CI']?.currency || 'FCFA';
   const [name, setName] = useState(product.name);
   const [price, setPrice] = useState(product.price.toString());
   const [stock, setStock] = useState((product.stock || 0).toString());
@@ -62,7 +66,7 @@ export const EditProductModal: React.FC<EditProductModalProps> = ({ product, use
           </div>
           <div className="flex gap-4">
             <div className="flex-1">
-              <label className="block text-xs uppercase tracking-widest text-art-muted mb-2">Prix (€) *</label>
+              <label className="block text-xs uppercase tracking-widest text-art-muted mb-2">Prix ({currency}) *</label>
               <input
                 required
                 value={price}

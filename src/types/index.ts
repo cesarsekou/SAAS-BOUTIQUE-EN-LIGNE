@@ -10,16 +10,20 @@ export interface Product {
 }
 
 export interface StoreData {
-  storeName: string;
-  storeSlug: string;
+  id: string;           // UUID du marchand dans la table users
+  store_name: string;
+  store_url: string;
+  store_description?: string;
   categories?: string[];
-  themeColor?: string;
-  backgroundColor?: string;
-  textColor?: string;
-  heroImage?: string;
-  whatsappNumber?: string;
-  subscriptionPlan?: 'free' | 'essential' | 'pro';
-  subscriptionValidUntil?: any; // Firestore Timestamp
+  theme_color?: string;
+  background_color?: string;
+  text_color?: string;
+  hero_image?: string;
+  whatsapp_number?: string;
+  subscription_plan?: 'free' | 'essential' | 'pro';
+  subscription_valid_until?: string; // ISO 8601 string (Supabase TIMESTAMPTZ)
+  delivery_cost?: number;
+  country?: string;
 }
 
 export interface Order {
@@ -35,7 +39,7 @@ export interface Order {
     imageUrl?: string;
   }>;
   total: number;
-  status: 'pending' | 'completed' | 'cancelled';
+  status: 'pending' | 'processing' | 'shipping' | 'completed' | 'cancelled';
   createdAt: any;
   deliveryMethod: 'delivery' | 'pickup';
   deliveryAddress?: string;

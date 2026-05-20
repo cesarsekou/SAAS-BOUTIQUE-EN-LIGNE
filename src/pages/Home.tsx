@@ -1,9 +1,17 @@
 import { Link } from 'react-router-dom';
 import { ShoppingBag, ArrowRight, BarChart3, Globe, Smartphone } from 'lucide-react';
+import { Helmet } from 'react-helmet-async';
 
 export default function Home() {
   return (
     <div className="min-h-screen text-art-text flex flex-col items-center overflow-x-hidden relative bg-transparent">
+      <Helmet>
+        <title>OmniShop — Créez votre boutique en ligne en un clin d'œil</title>
+        <meta name="description" content="Vendez facilement sur Instagram, TikTok ou WhatsApp. Créez votre catalogue, partagez votre lien et recevez vos commandes. Pensé pour l'Afrique." />
+        <meta property="og:title" content="OmniShop — Votre boutique web en un clin d'œil" />
+        <meta property="og:description" content="Vendez facilement sur les réseaux sociaux. Créez votre catalogue et recevez vos commandes." />
+        <meta property="og:type" content="website" />
+      </Helmet>
       {/* Decorative Background Element removed since we use liquid-bg */}
 
       {/* Header */}

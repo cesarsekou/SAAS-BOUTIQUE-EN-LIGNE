@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { User } from 'firebase/auth';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
+import { User } from '@supabase/supabase-js';
+import { supabase } from '../../lib/supabase';
 import { Loader2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { useAuth } from '../../contexts/AuthContext';
+import { COUNTRIES } from '../../data/countries';
 import {
   BarChart as RechartsBarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, LineChart, Line,
@@ -14,25 +15,41 @@ interface StatsProps {
 }
 
 export function Stats({ user }: StatsProps) {
+  const { storeData } = useAuth();
+  const currency = COUNTRIES[storeData?.country || 'CI']?.currency || 'FCFA';
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<'week' | 'month' | 'year'>('month');
 
+  const fetchOrders = async () => {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('user_id', user.id);
+    
+    if (data) setOrders(data);
+    setLoading(false);
+  };
+
   useEffect(() => {
-    const q = query(
-      collection(db, 'orders'),
-      where('storeId', '==', user.uid),
-      where('status', '==', 'completed')
-    );
-    const unsubscribe = onSnapshot(q, (snap) => {
-      const o = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setOrders(o);
-      setLoading(false);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'orders');
-    });
-    return () => unsubscribe();
-  }, [user.uid]);
+    fetchOrders();
+
+    const channel = supabase
+      .channel('public:orders:stats')
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'orders', 
+        filter: `user_id=eq.${user.id}` 
+      }, () => {
+        fetchOrders();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user.id]);
 
   const filteredOrders = useMemo(() => {
     const now = new Date();
@@ -40,20 +57,28 @@ export function Stats({ user }: StatsProps) {
     if (period === 'week') periodStart.setDate(now.getDate() - 7);
     if (period === 'month') periodStart.setMonth(now.getMonth() - 1);
     if (period === 'year') periodStart.setFullYear(now.getFullYear() - 1);
-    return orders.filter(o => o.createdAt && o.createdAt.toDate() >= periodStart);
+    
+    return orders.filter(o => {
+      if (!o.created_at) return false;
+      const d = new Date(o.created_at);
+      return d >= periodStart;
+    });
   }, [orders, period]);
 
-  const totalSales = useMemo(() => filteredOrders.reduce((sum, o) => sum + (o.totalAmount || 0), 0), [filteredOrders]);
-  const numOrders = filteredOrders.length;
+  const completedOrders = useMemo(() => filteredOrders.filter(o => o.status === 'completed'), [filteredOrders]);
+  const pendingOrders = useMemo(() => filteredOrders.filter(o => o.status === 'pending' || o.status === 'processing'), [filteredOrders]);
+  const totalSales = useMemo(() => completedOrders.reduce((sum, o) => sum + Number(o.total || 0), 0), [completedOrders]);
+  const numOrders = completedOrders.length;
+  const numPending = pendingOrders.length;
 
   const chartData = useMemo(() => {
     const dataMap: Record<string, number> = {};
     filteredOrders.forEach(o => {
-      const d = o.createdAt.toDate();
+      const d = new Date(o.created_at);
       const key = period === 'year'
         ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
         : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      dataMap[key] = (dataMap[key] || 0) + o.totalAmount;
+      dataMap[key] = (dataMap[key] || 0) + Number(o.total || 0);
     });
     return Object.entries(dataMap)
       .sort((a, b) => a[0].localeCompare(b[0]))
@@ -64,11 +89,12 @@ export function Stats({ user }: StatsProps) {
     const productSales: Record<string, { name: string; quantity: number; revenue: number }> = {};
     filteredOrders.forEach(o => {
       o.items?.forEach((item: any) => {
-        if (!productSales[item.product?.id]) {
-          productSales[item.product?.id] = { name: item.product?.name, quantity: 0, revenue: 0 };
+        const pId = item.productId || 'unknown';
+        if (!productSales[pId]) {
+          productSales[pId] = { name: item.name, quantity: 0, revenue: 0 };
         }
-        productSales[item.product?.id].quantity += item.quantity;
-        productSales[item.product?.id].revenue += item.quantity * (item.product?.price || 0);
+        productSales[pId].quantity += item.quantity;
+        productSales[pId].revenue += item.quantity * Number(item.price || 0);
       });
     });
     return Object.values(productSales).sort((a, b) => b.quantity - a.quantity).slice(0, 5);
@@ -96,16 +122,21 @@ export function Stats({ user }: StatsProps) {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
         <div className="glass p-8">
           <h2 className="text-sm uppercase tracking-widest text-art-muted mb-4">Ventes Totales</h2>
-          <p className="text-4xl font-serif italic text-art-text">€{totalSales.toFixed(2)}</p>
+          <p className="text-4xl font-serif italic text-art-text">{totalSales.toFixed(0)} {currency}</p>
           <p className="text-xs text-art-muted mt-2">Pour la période sélectionnée</p>
         </div>
         <div className="glass p-8">
           <h2 className="text-sm uppercase tracking-widest text-art-muted mb-4">Commandes Terminées</h2>
           <p className="text-4xl font-serif italic text-art-text">{numOrders}</p>
           <p className="text-xs text-art-muted mt-2">Pour la période sélectionnée</p>
+        </div>
+        <div className="glass p-8 border-l-4 border-l-orange-400">
+          <h2 className="text-sm uppercase tracking-widest text-art-muted mb-4">En Attente / Préparation</h2>
+          <p className="text-4xl font-serif italic text-orange-500">{numPending}</p>
+          <p className="text-xs text-art-muted mt-2">Commandes à traiter</p>
         </div>
       </div>
 
@@ -118,7 +149,7 @@ export function Stats({ user }: StatsProps) {
                 <RechartsBarChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E5E5" />
                   <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#666' }} dy={10} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#666' }} dx={-10} tickFormatter={(val) => `€${val}`} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#666' }} dx={-10} tickFormatter={(val) => `${val}`} />
                   <Tooltip cursor={{ fill: '#FDFCF8' }} contentStyle={{ backgroundColor: '#FFF', border: '1px solid #E5E5E5', borderRadius: '0', fontSize: '12px', padding: '10px' }} />
                   <Bar dataKey="total" fill="#1A1A1A" radius={[2, 2, 0, 0]} barSize={40} />
                 </RechartsBarChart>
@@ -126,7 +157,7 @@ export function Stats({ user }: StatsProps) {
                 <LineChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E5E5" />
                   <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#666' }} dy={10} />
-                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#666' }} dx={-10} tickFormatter={(val) => `€${val}`} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#666' }} dx={-10} tickFormatter={(val) => `${val}`} />
                   <Tooltip contentStyle={{ backgroundColor: '#FFF', border: '1px solid #E5E5E5', borderRadius: '0', fontSize: '12px', padding: '10px' }} />
                   <Line type="monotone" dataKey="total" stroke="#1A1A1A" strokeWidth={2} dot={{ r: 4, fill: '#1A1A1A' }} activeDot={{ r: 6 }} />
                 </LineChart>
@@ -152,7 +183,7 @@ export function Stats({ user }: StatsProps) {
                 </div>
                 <div className="text-right">
                   <p className="font-mono text-art-text">{p.quantity} <span className="text-xs text-art-muted uppercase">vendus</span></p>
-                  <p className="text-sm font-serif italic text-art-muted">€{p.revenue.toFixed(2)}</p>
+                  <p className="text-sm font-serif italic text-art-muted">{p.revenue.toFixed(2)} {currency}</p>
                 </div>
               </div>
             ))}
